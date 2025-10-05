@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+groq
+python-multipart
+python-dotenv
+requests
+supabase
+pydantic
+langgraph==0.6.8
+langchain-groq

@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en" class="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Urdu Medical History Voice Assistant</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.1/dist/tailwind.min.css" rel="stylesheet" />
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Noto+Nastaliq+Urdu&display=swap');
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: linear-gradient(135deg, #afb4c2 0%, #1e293b 100%);
+      min-height: 100vh;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      overflow: hidden;
+    }
+
+    /* Chat bubbles */
+    .message {
+      max-width: 70%;
+      padding: 10px 16px;
+      border-radius: 20px;
+      margin: 8px 0;
+      font-size: 15px;
+      line-height: 1.4;
+    }
+    .ai-message {
+      background: #e2e8f0;
+      align-self: flex-start;
+    }
+    .user-message {
+      background: #0d9488;
+      color: white;
+      align-self: flex-end;
+    }
+
+    .history-card {
+      background: white;
+      color: black;
+      border: 1px solid #cbd5e1;
+      border-radius: 12px;
+      padding: 16px;
+      width: 100%;
+      margin-top: 1rem;
+      display: none;
+    }
+
+    #chatArea::-webkit-scrollbar {
+      display: none;
+    }
+
+    /* Floating mic button */
+    .floating-mic {
+      position: fixed;
+      bottom: 50px;
+      right: 50%;
+      transform: translateX(50%);
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: #0d9488;
+      color: white;
+      font-size: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      outline: none;
+      box-shadow: 0 0 20px rgba(13, 148, 136, 0.6);
+      cursor: pointer;
+      transition: all 0.3s ease;
+      z-index: 10;
+    }
+
+    .floating-mic:hover {
+      transform: translateX(50%) scale(1.1);
+    }
+
+    .recording {
+      animation: pulse 1.5s infinite;
+      background: #dc2626 !important;
+      box-shadow: 0 0 30px rgba(239, 68, 68, 0.8);
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        transform: translateX(50%) scale(1);
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+      }
+      50% {
+        transform: translateX(50%) scale(1.2);
+        box-shadow: 0 0 0 25px rgba(239, 68, 68, 0);
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="w-full max-w-md bg-white dark:bg-gray-900 shadow-2xl rounded-2xl p-6 flex flex-col items-center space-y-4 border border-gray-200 dark:border-gray-700">
+    <h1 class="text-2xl font-semibold text-center mb-2">🩺 Urdu Medical Assistant</h1>
+
+    <div id="status" class="text-gray-600 dark:text-gray-300 text-center">
+      Click “Start Medical Interview” to begin
+    </div>
+
+    <div id="chatArea" class="w-full h-80 overflow-y-auto bg-gray-50 dark:bg-gray-800 rounded-xl p-4 flex flex-col gap-2 mt-2 shadow-inner"></div>
+
+    <!-- Hidden listening blob -->
+    <div id="blobContainer" class="hidden flex flex-col items-center justify-center">
+      <p class="text-sm text-gray-500 mt-2">Listening...</p>
+    </div>
+
+    <div id="controls" class="flex flex-col items-center gap-3 w-full">
+      <button id="startInterviewBtn" class="w-full py-3 px-6 rounded-lg bg-teal-600 hover:bg-teal-700 text-white transition-all">
+        Start Medical Interview
+      </button>
+    </div>
+
+    <div id="history" class="history-card"></div>
+  </div>
+
+  <!-- Floating mic toggle -->
+  <button id="micBtn" class="floating-mic hidden">🎤</button>
+
+  <script>
+    const apiBase = 'http://localhost:8000';
+    let sessionId = null;
+    let recorder = null;
+    let audio = null;
+    let isRecording = false;
+
+    const startInterviewBtn = document.getElementById('startInterviewBtn');
+    const statusDiv = document.getElementById('status');
+    const historyDiv = document.getElementById('history');
+    const chatArea = document.getElementById('chatArea');
+    const blobContainer = document.getElementById('blobContainer');
+    const micBtn = document.getElementById('micBtn');
+
+    function addMessage(content, sender = 'ai') {
+      const div = document.createElement('div');
+      div.classList.add('message', sender === 'ai' ? 'ai-message' : 'user-message');
+      div.textContent = content;
+      chatArea.appendChild(div);
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    async function startInterview() {
+      statusDiv.textContent = 'Starting interview...';
+      startInterviewBtn.disabled = true;
+
+      try {
+        const res = await fetch(`${apiBase}/api/start-interview-with-voice`, { method: 'POST' });
+        const data = await res.json();
+        if (data.error) throw new Error(data.details);
+        sessionId = data.session_id;
+
+        startInterviewBtn.style.display = 'none';
+        micBtn.classList.remove('hidden');
+        addMessage(data.message, 'ai');
+
+        if (data.audio_base64) {
+          await playAudioFromBase64(data.audio_base64);
+        } else {
+          await ttsAndPlay(data.message);
+        }
+      } catch (e) {
+        statusDiv.textContent = `Error starting interview: ${e.message}`;
+        startInterviewBtn.disabled = false;
+      }
+    }
+
+    async function startRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        recorder = new MediaRecorder(stream);
+        const chunks = [];
+        recorder.ondataavailable = e => chunks.push(e.data);
+        recorder.onstop = async () => {
+          const blob = new Blob(chunks, { type: 'audio/webm' });
+          blobContainer.classList.add('hidden');
+          await sendAudio(blob);
+        };
+        recorder.start();
+        blobContainer.classList.remove('hidden');
+        statusDiv.textContent = 'Recording...';
+      } catch (e) {
+        statusDiv.textContent = `Error accessing mic: ${e.message}`;
+      }
+    }
+
+    function stopRecording() {
+      if (recorder && recorder.state === 'recording') {
+        recorder.stop();
+        statusDiv.textContent = 'Processing...';
+      }
+    }
+
+    async function sendAudio(blob) {
+      try {
+        const formData = new FormData();
+        formData.append('file', blob, 'recording.webm');
+        formData.append('model', 'whisper-large-v3');
+        const transRes = await fetch(`${apiBase}/transcribe`, { method: 'POST', body: formData });
+        const trans = await transRes.json();
+        if (trans.error) throw new Error(trans.error);
+
+        addMessage(trans.text, 'user');
+
+        const sendRes = await fetch(`${apiBase}/api/send-message-with-voice`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId, message: trans.text })
+        });
+        const resp = await sendRes.json();
+        if (resp.error) throw new Error(resp.details);
+
+        if (resp.is_complete) {
+          statusDiv.textContent = 'Interview complete!';
+          await saveHistory(resp.collected_data);
+        } else {
+          addMessage(resp.message, 'ai');
+          if (resp.audio_base64) {
+            await playAudioFromBase64(resp.audio_base64);
+          } else {
+            await ttsAndPlay(resp.message);
+          }
+          statusDiv.textContent = 'AI done speaking. Tap mic to respond.';
+        }
+      } catch (e) {
+        statusDiv.textContent = `Error: ${e.message}`;
+      }
+    }
+
+    async function playAudioFromBase64(audioBase64) {
+      return new Promise((resolve, reject) => {
+        try {
+          const audioBlob = new Blob([Uint8Array.from(atob(audioBase64), c => c.charCodeAt(0))], { type: 'audio/mp3' });
+          const url = URL.createObjectURL(audioBlob);
+          audio = new Audio(url);
+          audio.onended = () => {
+            URL.revokeObjectURL(url);
+            resolve();
+          };
+          audio.play().catch(e => reject(e));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    }
+
+    async function ttsAndPlay(text) {
+      const formData = new FormData();
+      formData.append('text', text);
+      formData.append('voice_id', 'v_meklc281');
+      formData.append('output_format', 'MP3_22050_32');
+      formData.append('save_file', 'false');
+      const ttsRes = await fetch(`${apiBase}/text-to-speech`, { method: 'POST', body: formData });
+      if (!ttsRes.ok) throw new Error('TTS failed');
+      const audioBlob = await ttsRes.blob();
+      const url = URL.createObjectURL(audioBlob);
+      audio = new Audio(url);
+      await audio.play();
+    }
+
+    async function saveHistory(collectedData) {
+      try {
+        const historyRes = await fetch(`${apiBase}/api/get-history?session_id=${sessionId}&view=patient`);
+        const historyData = await historyRes.json();
+        const userEmail = "thirstycheems@gmail.com";
+        const storeRes = await fetch(`${apiBase}/api/store-medical-history`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_email: userEmail, medical_data: collectedData })
+        });
+        const storeData = await storeRes.json();
+        if (storeData.success) {
+          historyDiv.style.display = 'block';
+          historyDiv.innerHTML = `<h3 class="text-lg font-semibold mb-2">🩺 Collected Medical History</h3><pre class="text-sm">${JSON.stringify(collectedData, null, 2)}</pre>`;
+          statusDiv.textContent = 'Medical history saved successfully.';
+        } else {
+          throw new Error(storeData.detail || 'Failed to store');
+        }
+      } catch (e) {
+        statusDiv.textContent = `Saved partially: ${e.message}`;
+      }
+    }
+
+    // mic toggle logic
+    micBtn.addEventListener('click', async () => {
+      if (!isRecording) {
+        isRecording = true;
+        micBtn.classList.add('recording');
+        micBtn.textContent = '⏹️';
+        await startRecording();
+      } else {
+        isRecording = false;
+        micBtn.classList.remove('recording');
+        micBtn.textContent = '🎤';
+        stopRecording();
+      }
+    });
+
+    startInterviewBtn.addEventListener('click', startInterview);
+  </script>
+</body>
+</html>
