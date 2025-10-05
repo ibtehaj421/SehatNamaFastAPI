@@ -7,4 +7,6 @@ requests
 supabase
 pydantic
 langgraph==0.6.8
+supabase
+websocket-client
 langchain-groq
